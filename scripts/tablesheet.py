@@ -29,6 +29,32 @@ class Col:
     wrap: bool = False
 
 
+# --- text-fit heuristics used to keep headers and wrapped cells from clipping ---
+CHARS_PER_WIDTH_UNIT = 1.15   # approx. characters a Calibri column-width unit holds
+LINE_HEIGHT_PT = 14           # approx. line height for 10.5pt Calibri
+ROW_PADDING_PT = 6
+DEFAULT_ROW_HEIGHT = 20
+HEADER_WIDTH_PADDING = 2
+
+
+def _header_safe_width(name, width):
+    """Widen a column, if needed, so its own header text doesn't clip."""
+    needed = len(str(name)) + HEADER_WIDTH_PADDING
+    return max(width, needed)
+
+
+def _lines_needed(text, width):
+    if text is None or text == "":
+        return 1
+    capacity = max(1, int(width * CHARS_PER_WIDTH_UNIT))
+    length = len(str(text))
+    return max(1, -(-length // capacity))  # ceil division
+
+
+def _row_height_for_lines(lines):
+    return max(DEFAULT_ROW_HEIGHT, lines * LINE_HEIGHT_PT + ROW_PADDING_PT)
+
+
 def build_table_sheet(wb, sheet_name, title, subtitle, columns, demo_rows, table_name,
                        n_formula_rows, demo, nav_links=None, tab_color=DUSTY_ROSE,
                        start_col=2, print_landscape=True, extra_after_header=None):
@@ -47,13 +73,16 @@ def build_table_sheet(wb, sheet_name, title, subtitle, columns, demo_rows, table
         row = extra_after_header(ws, row, last_col_letter) or row
 
     header_row = row
+    effective_widths = []
     for i, col in enumerate(columns):
         c = start_col + i
         cell = ws.cell(row=header_row, column=c, value=col.name)
         cell.font = F_HEADER_LIGHT
         cell.fill = FILL_HEADER
         cell.alignment = ALIGN_CENTER
-        ws.column_dimensions[get_column_letter(c)].width = col.width
+        eff_width = _header_safe_width(col.name, col.width)
+        effective_widths.append(eff_width)
+        ws.column_dimensions[get_column_letter(c)].width = eff_width
 
     n_rows = max(n_formula_rows, len(demo_rows), 1)
     first_data_row = header_row + 1
@@ -62,6 +91,7 @@ def build_table_sheet(wb, sheet_name, title, subtitle, columns, demo_rows, table
     for r_i in range(n_rows):
         row_n = first_data_row + r_i
         demo_data = demo_rows[r_i] if demo and r_i < len(demo_rows) else {}
+        max_lines = 1
         for i, col in enumerate(columns):
             c = start_col + i
             cell = ws.cell(row=row_n, column=c)
@@ -79,7 +109,10 @@ def build_table_sheet(wb, sheet_name, title, subtitle, columns, demo_rows, table
                 cell.alignment = ALIGN_RIGHT
             else:
                 cell.alignment = ALIGN_LEFT_WRAP if col.wrap else ALIGN_LEFT
-        ws.row_dimensions[row_n].height = 20
+            if col.wrap and isinstance(cell.value, str) and not cell.value.startswith("="):
+                lines = _lines_needed(cell.value, effective_widths[i])
+                max_lines = max(max_lines, lines)
+        ws.row_dimensions[row_n].height = _row_height_for_lines(max_lines)
 
     # Excel Table
     ref = f"{get_column_letter(start_col)}{header_row}:{last_col_letter}{last_data_row}"

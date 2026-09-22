@@ -30,7 +30,7 @@ LISTS = {
     "FoodCategory": ["Appetizers", "Main Course", "Dessert", "Cake", "Drinks", "Late Night Food"],
     "HoneymoonCategory": ["Flights", "Hotel", "Transportation", "Food", "Activities",
                            "Shopping", "Travel Insurance", "Miscellaneous"],
-    "Rating": ["1", "2", "3", "4", "5"],
+    "Rating": [1, 2, 3, 4, 5],
     "PlusOne": ["Yes", "No"],
     "Children": ["Yes", "No"],
 }
@@ -109,6 +109,14 @@ def build_settings_sheet(wb, demo=True):
     add_named_range(wb, "RSVPDeadline", cell_map["RSVP Reply-By Date"])
 
     ws.page_setup.orientation = "portrait"
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 1
+    ws.page_margins.left = 0.5
+    ws.page_margins.right = 0.5
+    ws.page_margins.top = 0.6
+    ws.page_margins.bottom = 0.6
+    ws.print_area = f"A1:F{note_row}"
     return cell_map
 
 

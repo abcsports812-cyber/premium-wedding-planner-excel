@@ -16,40 +16,50 @@ NAV_HOME = [("Dashboard", "Dashboard"), ("Start Here", "START HERE")]
 def build_seating(wb, guest_first, guest_last, demo):
     ws = wb.create_sheet("Seating Plan")
     set_sheet_defaults(ws)
-    row = sheet_header(ws, "SEATING PLAN", "Assign every guest to a table — synced automatically with your Guest List.", "G", NAV_HOME)
+    row = sheet_header(ws, "SEATING PLAN", "Assign every guest to a table — synced automatically with your Guest List.", "K", NAV_HOME)
 
-    row = section_title(ws, row, 2, "Table Overview", "G")
+    row = section_title(ws, row, 2, "Table Overview", "K")
     headers = ["Table #", "Capacity", "Seated", "Seats Remaining"]
-    for i, h in enumerate(headers):
-        c = ws.cell(row=row, column=2 + i, value=h)
-        c.font = F_HEADER_LIGHT
-        c.fill = FILL_HEADER
-        c.alignment = ALIGN_CENTER
+    # Two side-by-side blocks (tables 1-10, 11-20) so this reference section stays
+    # compact — keeping the freeze pane below it from swallowing too much of the screen.
+    BLOCK_COLS = [2, 8]  # B..E and H..K
+    for block_col in BLOCK_COLS:
+        for i, h in enumerate(headers):
+            c = ws.cell(row=row, column=block_col + i, value=h)
+            c.font = F_HEADER_LIGHT
+            c.fill = FILL_HEADER
+            c.alignment = ALIGN_CENTER
     tbl_row0 = row + 1
     n_tables = 20
+    half = 10
     for t in range(1, n_tables + 1):
-        r = tbl_row0 + t - 1
-        ws.cell(row=r, column=2, value=t).alignment = ALIGN_CENTER
-        cap = ws.cell(row=r, column=3, value="=IF(B{r}<=TableCount,SeatsPerTable,\"\")".format(r=r))
+        block_col = BLOCK_COLS[0] if t <= half else BLOCK_COLS[1]
+        r = tbl_row0 + ((t - 1) % half)
+        b, cpc, sc, rc = block_col, block_col + 1, block_col + 2, block_col + 3
+        ws.cell(row=r, column=b, value=t).alignment = ALIGN_CENTER
+        cap = ws.cell(row=r, column=cpc, value="=IF({bl}{r}<=TableCount,SeatsPerTable,\"\")".format(bl=get_column_letter(b), r=r))
         cap.number_format = FMT_INT
         cap.alignment = ALIGN_CENTER
-        seated = ws.cell(row=r, column=4,
-                          value=f"=IF(C{r}=\"\",\"\",COUNTIF(GuestTable[Table Number],B{r}))")
+        seated = ws.cell(row=r, column=sc,
+                          value=f"=IF({get_column_letter(cpc)}{r}=\"\",\"\",COUNTIF(GuestTable[Table Number],{get_column_letter(b)}{r}))")
         seated.number_format = FMT_INT
         seated.alignment = ALIGN_CENTER
-        remaining = ws.cell(row=r, column=5, value=f'=IF(C{r}="","",C{r}-D{r})')
+        remaining = ws.cell(row=r, column=rc,
+                             value=f'=IF({get_column_letter(cpc)}{r}="","",{get_column_letter(cpc)}{r}-{get_column_letter(sc)}{r})')
         remaining.number_format = FMT_INT
         remaining.alignment = ALIGN_CENTER
-        for cc in range(2, 6):
+        for cc in range(b, rc + 1):
             ws.cell(row=r, column=cc).border = B_ALL_LIGHT
             ws.cell(row=r, column=cc).font = F_BODY
             if r % 2 == 0:
                 ws.cell(row=r, column=cc).fill = fill("FBF5F0")
-    ws.conditional_formatting.add(f"E{tbl_row0}:E{tbl_row0 + n_tables - 1}", FormulaRule(
-        formula=[f"AND(E{tbl_row0}<>\"\",E{tbl_row0}<0)"], fill=fill("F3D9D6")))
+    for block_col in BLOCK_COLS:
+        rc_letter = get_column_letter(block_col + 3)
+        ws.conditional_formatting.add(f"{rc_letter}{tbl_row0}:{rc_letter}{tbl_row0 + half - 1}", FormulaRule(
+            formula=[f'AND({rc_letter}{tbl_row0}<>"",{rc_letter}{tbl_row0}<0)'], fill=fill("F3D9D6")))
 
-    roster_row = tbl_row0 + n_tables + 2
-    roster_row = section_title(ws, roster_row, 2, "Guest Roster", "G")
+    roster_row = tbl_row0 + half + 2
+    roster_row = section_title(ws, roster_row, 2, "Guest Roster", "K")
     headers2 = ["Table Number", "Guest Name", "Household", "Meal", "Special Requirements", "Notes"]
     for i, h in enumerate(headers2):
         c = ws.cell(row=roster_row, column=2 + i, value=h)
@@ -74,11 +84,20 @@ def build_seating(wb, guest_first, guest_last, demo):
                 cell.fill = fill("FBF5F0")
     for i, w in enumerate([13, 22, 20, 15, 24, 22]):
         ws.column_dimensions[get_column_letter(2 + i)].width = w
+    for c in BLOCK_COLS:
+        for j in range(4):
+            ws.column_dimensions[get_column_letter(c + j)].width = max(
+                ws.column_dimensions[get_column_letter(c + j)].width or 0, 13)
+    # Freeze just below the roster's own header row — the Table Overview above it
+    # is now a compact two-column block rather than a 20-row single column, so far
+    # less of the screen is consumed by the frozen region than before.
     ws.freeze_panes = f"B{roster_row+1}"
     ws.page_setup.orientation = "landscape"
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
+    ws.print_area = f"A1:K{roster_row + n_guests}"
+    ws.print_title_rows = f"{roster_row}:{roster_row}"
     return ws
 
 
@@ -149,6 +168,15 @@ def build_calendar(wb, checklist_first, checklist_last, payments_first, payments
     for i, w in enumerate([14, 30, 14, 16]):
         ws.column_dimensions[get_column_letter(2 + i)].width = w
     ws.page_setup.orientation = "portrait"
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.page_margins.left = 0.5
+    ws.page_margins.right = 0.5
+    ws.page_margins.top = 0.6
+    ws.page_margins.bottom = 0.6
+    ws.print_area = f"A1:E{r1 + m - 1}"
+    ws.print_title_rows = f"{row}:{row},{row2}:{row2}"
     return ws
 
 
@@ -226,4 +254,12 @@ def build_start_here(wb, demo):
         ws.column_dimensions[col].width = 13
     ws.column_dimensions["B"].width = 18
     ws.page_setup.orientation = "portrait"
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 1
+    ws.page_margins.left = 0.5
+    ws.page_margins.right = 0.5
+    ws.page_margins.top = 0.6
+    ws.page_margins.bottom = 0.6
+    ws.print_area = f"A1:H{row}"
     return ws
