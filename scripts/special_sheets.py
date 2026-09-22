@@ -6,7 +6,7 @@ from styles import (
     F_KPI_LABEL, kpi_card, col_idx, DEEP_ROSE, GOLD, FILL_CREAM, B_ALL_LIGHT, FILL_LIGHT_SAGE,
     fill, LIGHT_SAGE, LIGHT_BLUSH, F_NAV, set_internal_hyperlink,
 )
-from tablesheet import status_conditional_formatting
+from tablesheet import status_conditional_formatting, _lines_needed, _row_height_for_lines
 from openpyxl.formatting.rule import FormulaRule
 
 NAV_HOME = [("Dashboard", "Dashboard"), ("Start Here", "START HERE")]
@@ -211,12 +211,18 @@ def build_start_here(wb, demo):
         "5. Each sheet has a small navigation link at the top-left to jump back to the Dashboard or this page.",
         "6. All key sheets are print-ready — use File > Print, and each will fit neatly on the page.",
     ]
+    # Merged width of the B:H tip cell, matching the column widths set below
+    # (B=18, C-H=13 each) -- needed up front so wrapped tips get a tall
+    # enough row instead of the previous fixed 18pt, which clipped/overlapped
+    # the two longest tips onto their neighbors.
+    tip_merged_width = 18 + 13 * 6
     for tip in tips:
         c = ws.cell(row=row, column=2, value=tip)
         c.font = F_BODY
         c.alignment = ALIGN_LEFT_WRAP
         ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=8)
-        ws.row_dimensions[row].height = 18
+        lines = _lines_needed(tip, tip_merged_width)
+        ws.row_dimensions[row].height = _row_height_for_lines(lines)
         row += 1
 
     row += 1

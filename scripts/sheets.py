@@ -143,7 +143,7 @@ def build_guest_list(wb, ranges, demo):
     srow += 1
     add_summary_strip(ws, srow, lastcol, [
         ("Total Invited", f'COUNTA(B{first}:B{last})', FMT_INT),
-        ("Attending", f'COUNTIF(I{first}:I{last},"Attending")+COUNTIFS(I{first}:I{last},"Attending",J{first}:J{last},"Yes")', FMT_INT),
+        ("Attending", f'COUNTIF(I{first}:I{last},"Attending")', FMT_INT),
         ("Pending", f'COUNTIF(I{first}:I{last},"Pending")', FMT_INT),
         ("Declined", f'COUNTIF(I{first}:I{last},"Declined")', FMT_INT),
     ])
