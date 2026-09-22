@@ -4,7 +4,7 @@ from styles import (
     sheet_header, set_sheet_defaults, section_title, F_BODY, F_HEADER_LIGHT, FILL_HEADER,
     ALIGN_LEFT, ALIGN_LEFT_WRAP, ALIGN_CENTER, FMT_CURRENCY0, FMT_DATE, FMT_INT, F_SECTION,
     F_KPI_LABEL, kpi_card, col_idx, DEEP_ROSE, GOLD, FILL_CREAM, B_ALL_LIGHT, FILL_LIGHT_SAGE,
-    fill, LIGHT_SAGE, LIGHT_BLUSH, F_NAV,
+    fill, LIGHT_SAGE, LIGHT_BLUSH, F_NAV, set_internal_hyperlink,
 )
 from tablesheet import status_conditional_formatting
 from openpyxl.formatting.rule import FormulaRule
@@ -242,7 +242,7 @@ def build_start_here(wb, demo):
     for name, desc in directory:
         c1 = ws.cell(row=row, column=2, value=name)
         c1.font = F_NAV
-        c1.hyperlink = f"#'{name}'!A1"
+        set_internal_hyperlink(c1, name)
         c2 = ws.cell(row=row, column=4, value=desc)
         c2.font = F_BODY
         ws.merge_cells(start_row=row, start_column=4, end_row=row, end_column=8)

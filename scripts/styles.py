@@ -120,9 +120,23 @@ def sheet_header(ws: Worksheet, title, subtitle, last_col_letter="N", nav_links=
         for label, target in nav_links:
             cell = ws.cell(row=1, column=col, value=f"‹ {label}")
             cell.font = F_NAV
-            cell.hyperlink = f"#'{target}'!A1"
+            set_internal_hyperlink(cell, target)
             col += 1
     return 5  # first free row after header
+
+
+def set_internal_hyperlink(cell, sheet_name, cell_ref="A1"):
+    """Point `cell` at another sheet in this same workbook.
+
+    Assigning a bare string to `.hyperlink` (e.g. "#'Sheet'!A1") makes
+    openpyxl write it as an EXTERNAL relationship whose literal target is
+    that string — Excel can't resolve it and reports "Reference is not
+    valid". An internal jump needs a Hyperlink object with `location` set
+    (and no `target`), which Excel resolves directly with no relationship
+    needed at all.
+    """
+    from openpyxl.worksheet.hyperlink import Hyperlink
+    cell.hyperlink = Hyperlink(ref=cell.coordinate, location=f"'{sheet_name}'!{cell_ref}", target=None)
 
 
 def col_idx(letter):

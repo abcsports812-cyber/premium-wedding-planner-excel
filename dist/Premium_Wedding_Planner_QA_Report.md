@@ -105,3 +105,30 @@ Pairwise intersection test across all 28 chart pairs: **0 overlaps**, both horiz
 
 ## Not yet done (per your instructions)
 Commit and push are intentionally **not** performed. Everything above reflects the current state of `dist/Premium_Wedding_Planner_DEMO.xlsx` and `dist/Premium_Wedding_Planner_BLANK.xlsx` on disk, both freshly regenerated from the shared builder and recalculated. Awaiting your approval before committing/pushing.
+
+---
+
+## Addendum — Microsoft Excel compatibility fix pass (post-approval of the above)
+
+Two defects surfaced only under real Microsoft Excel (not LibreOffice) after the pass above:
+
+### A — "Excel found unreadable content" repair warning (Removed Feature: AutoFilter / Table)
+**Root cause:** openpyxl's default `Table._initialise_columns()` numbers each `<tableColumn id="...">` by worksheet column index (e.g. column B → id 2) rather than a workbook-wide counter. Since every table sheet starts near column B, table-column ids collided across all 12 tables (id=2 appeared in all 12, id=5 in most, etc.). Excel's real implementation requires these ids to be unique across the *whole workbook*, not just within one table (a stricter rule than the bare ECMA-376 spec), and silently strips the AutoFilter/Table feature on open when it finds collisions.
+
+**Fix** (`scripts/tablesheet.py`): every table's columns are now built explicitly with a workbook-global sequential id counter, giving all 120 columns across the 12 tables unique ids 1–120. Because this also bypasses openpyxl's implicit `table.autoFilter` assignment (previously a side effect of the same auto-init method), `tab.autoFilter` is now set explicitly alongside it, so no table lost its filter buttons.
+
+**Verified in the shipped XLSX:** 12/12 table-level `<autoFilter>` elements present, 0 worksheet-level autoFilters, 120/120 globally-unique table-column ids, 0 XML parse errors, zip integrity OK, `docProps/app.xml` confirms pure-openpyxl output.
+
+### B — On-slice doughnut chart labels ("Series1; Miscellaneous; 13500; 20%")
+**Root cause:** `clean_legend()` previously did `chart.dataLabels = None`, which omits `<c:dLbls>` entirely. LibreOffice treats an absent `dLbls` as "no labels" (matching the bare OOXML default), which is why every LibreOffice-rendered PDF looked clean — but real Excel's pie/doughnut chart-gallery template falls back to its own default label set (series name + category + value + percent) whenever `dLbls` is missing outright.
+
+**Fix** (`scripts/dashboard.py`): `clean_legend()` now sets `chart.dataLabels = DataLabelList(delete=True)`, writing the explicit `<c:dLbls><c:delete val="1"/></c:dLbls>` — the same XML Excel itself writes when a user manually deletes data labels. Applied only to the two doughnut charts (Expenses by Category, RSVP Status); the other 6 charts are untouched.
+
+### Final re-verification (both DEMO and BLANK, exact shipped bytes, never touched by LibreOffice)
+- 18 sheets, 12 tables, 12 table-level autoFilters, 0 worksheet-level autoFilters, 120/120 unique table-column ids, 29 dropdowns, 45 internal hyperlinks (all `location=`, none with `target`/`%20`/`r:id`)
+- 0 formula errors across 920 formulas (checked on disposable copies only; shipped files never resaved by LibreOffice)
+- All 8 chart caches populated with real values; both doughnuts carry the explicit `delete` dLbls
+- KPI values reconcile; 0 chart overlap; Dashboard paginates cleanly across 2 pages
+- BLANK contains zero leaked demo-data cells
+
+**Status: tested and approved by the user in actual Microsoft Excel.** No workbook modifications were made after that approval — this addendum documents the fix already reflected in the approved files. Committing and pushing now per explicit final approval.

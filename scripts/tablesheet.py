@@ -4,7 +4,8 @@ Honeymoon Budget."""
 
 from dataclasses import dataclass, field
 from typing import Callable, Optional
-from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.worksheet.table import Table, TableStyleInfo, TableColumn
+from openpyxl.worksheet.filters import AutoFilter
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.utils import get_column_letter
 from openpyxl.formatting.rule import FormulaRule
@@ -35,6 +36,26 @@ LINE_HEIGHT_PT = 14           # approx. line height for 10.5pt Calibri
 ROW_PADDING_PT = 6
 DEFAULT_ROW_HEIGHT = 20
 HEADER_WIDTH_PADDING = 2
+
+
+def _next_table_col_id(wb):
+    """A workbook-wide, sequential, unique id for the next Excel Table column.
+
+    openpyxl's own default (when a Table is added with no explicit
+    tableColumns) numbers each column's <tableColumn id="..."> by its
+    worksheet column index (e.g. column B -> id 2), not by a counter
+    unique across the workbook. Since every table sheet here starts near
+    column B, that leaves the same id values (2, 3, 4, ...) reused across
+    all 12 tables. ECMA-376 only requires a tableColumn id to be unique
+    *within* its own table, but Excel's actual implementation keeps a
+    single id namespace across the whole workbook, and silently strips
+    the AutoFilter/Table feature on open ("repairs" the file) when it
+    finds ids reused across tables. Handing out ids from one shared
+    counter for the whole workbook avoids that entirely.
+    """
+    n = getattr(wb, "_table_col_id_counter", 0) + 1
+    wb._table_col_id_counter = n
+    return n
 
 
 def _header_safe_width(name, width):
@@ -120,6 +141,14 @@ def build_table_sheet(wb, sheet_name, title, subtitle, columns, demo_rows, table
     tab.tableStyleInfo = TableStyleInfo(name="TableStyleLight9", showFirstColumn=False,
                                          showLastColumn=False, showRowStripes=True,
                                          showColumnStripes=False)
+    tab.tableColumns = [
+        TableColumn(id=_next_table_col_id(wb), name=col.name) for col in columns
+    ]
+    # Populating tableColumns ourselves (for globally-unique ids, see above)
+    # skips openpyxl's own Table._initialise_columns(), which is also the
+    # only place that assigns table.autoFilter -- so it must be set here
+    # too, or the table silently loses its header filter buttons.
+    tab.autoFilter = AutoFilter(ref=ref)
     ws.add_table(tab)
 
     # data validation dropdowns
@@ -134,7 +163,12 @@ def build_table_sheet(wb, sheet_name, title, subtitle, columns, demo_rows, table
             dv.add(f"{get_column_letter(c)}{first_data_row}:{get_column_letter(c)}{last_data_row}")
 
     ws.freeze_panes = f"{get_column_letter(start_col)}{first_data_row}"
-    ws.auto_filter.ref = ref
+    # NOTE: do not also set ws.auto_filter.ref here — the Table object above
+    # already declares its own <autoFilter> internally. A worksheet-level
+    # autoFilter over the same range in addition to the table's is invalid
+    # per the strict OOXML Excel enforces (though LibreOffice tolerates it),
+    # and is exactly what caused Excel's "repair/remove" of the AutoFilter
+    # and Table features on open.
 
     # print setup
     ws.page_setup.orientation = "landscape" if print_landscape else "portrait"

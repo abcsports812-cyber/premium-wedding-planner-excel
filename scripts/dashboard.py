@@ -1,15 +1,26 @@
+from collections import Counter, defaultdict
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font, Alignment, Border, Side
 from openpyxl.chart import BarChart, DoughnutChart, Reference
-from openpyxl.chart.label import DataLabelList
 from openpyxl.chart.marker import DataPoint
+from openpyxl.chart.legend import Legend
+from openpyxl.chart.label import DataLabelList
+from openpyxl.chart.text import RichText
+from openpyxl.chart.data_source import (
+    NumRef, NumDataSource, StrRef, StrData, NumData, StrVal, NumVal, AxDataSource,
+)
+from openpyxl.worksheet.pagebreak import Break
+from openpyxl.drawing.text import (
+    RichTextProperties, Paragraph, ParagraphProperties, CharacterProperties, Font as DrawFont,
+)
 from styles import (
     set_sheet_defaults, F_TITLE, F_SUBTITLE, F_SECTION, F_BODY, F_KPI_LABEL, kpi_card,
     FMT_CURRENCY0, FMT_PCT1, FMT_INT, FMT_DATE, col_idx, DEEP_ROSE, SAGE, GOLD, BLUSH,
     LIGHT_BLUSH, LIGHT_SAGE, MUTED_GOLD, CHARCOAL, DUSTY_ROSE, IVORY, FILL_LIGHT_BLUSH,
-    fill, F_NAV,
+    fill, F_NAV, set_internal_hyperlink,
 )
 from lists_settings import LISTS
+import demo_data as D
 
 LIST_COL = {k: i + 1 for i, k in enumerate(LISTS.keys())}
 
@@ -86,6 +97,118 @@ def colorize_doughnut(chart, n):
     series.data_points = pts
 
 
+def clean_legend(chart, position="r", font_size=1000):
+    """A right-hand, no-overlay legend with no on-slice data labels — the
+    readable way to label a doughnut with many (or oddly-sized) slices,
+    instead of per-slice text that overlaps.
+
+    Explicitly write <c:dLbls><c:delete val="1"/></c:dLbls> (the same XML
+    Excel itself writes when a user removes data labels via the UI) rather
+    than leaving `dLbls` out of the chart entirely. An absent `dLbls`
+    element is ambiguous per the OOXML default and LibreOffice renders it
+    as "no labels", but real Microsoft Excel falls back to its pie/doughnut
+    chart-gallery template defaults (series name + category name + value +
+    percent, semicolon-separated) whenever `dLbls` is missing outright —
+    which is exactly the on-slice clutter this is meant to prevent."""
+    chart.dataLabels = DataLabelList(delete=True)
+    legend = Legend(legendPos=position)
+    legend.overlay = False
+    cp = CharacterProperties(sz=font_size, latin=DrawFont(typeface="Calibri"))
+    legend.txPr = RichText(
+        bodyPr=RichTextProperties(),
+        p=[Paragraph(pPr=ParagraphProperties(defRPr=cp), endParaRPr=cp)],
+    )
+    chart.legend = legend
+
+
+def cache_categories(chart, values):
+    """Rebuild every series' category axis as a properly-typed StrRef with a
+    real cached value list, keeping the exact same cell range (the <f>
+    formula) that set_categories() already established — the chart stays
+    exactly as dynamically linked as before.
+
+    openpyxl's set_categories() unconditionally writes a *numeric* reference
+    (numRef) regardless of what the referenced cells actually contain, and
+    never populates a cache at all (confirmed by inspecting its source and
+    the generated chart XML). For every chart here the categories are TEXT
+    (category names, RSVP labels, meal names, period labels, item
+    descriptions) — a text range wired as numeric, with zero cached points,
+    is what left Microsoft Excel with nothing to paint until a manual
+    recalculation. Real Excel-generated charts always carry a populated
+    cache; this reproduces that.
+    """
+    n = len(values)
+    for s in chart.series:
+        ref_f = s.cat.numRef.f
+        pts = [StrVal(idx=i, v=str(v)) for i, v in enumerate(values) if v not in (None, "")]
+        s.cat = AxDataSource(strRef=StrRef(f=ref_f, strCache=StrData(ptCount=n, pt=pts)))
+
+
+def cache_values(series, values):
+    """Populate a series' numeric value cache in place (see cache_categories
+    for why), keeping its existing formula reference unchanged."""
+    ref_f = series.val.numRef.f
+    n = len(values)
+    pts = [NumVal(idx=i, v=v) for i, v in enumerate(values) if v is not None]
+    series.val = NumDataSource(numRef=NumRef(f=ref_f, numCache=NumData(formatCode="General", ptCount=n, pt=pts)))
+
+
+def compute_chart_cache_data(demo):
+    """Python-side mirror of the DEMO workbook formulas' current results
+    (or the BLANK template's all-empty state), used only to seed each
+    chart's cache — the cells themselves are untouched, still live formulas
+    that recalculate normally when the user edits their data."""
+    data = {}
+    if demo:
+        planned_by_cat = defaultdict(float)
+        actual_by_cat = defaultdict(float)
+        for cat, sub, item, vendor, planned, actual, dep, paid, due in D.BUDGET_ITEMS:
+            planned_by_cat[cat] += planned
+            actual_by_cat[cat] += actual
+        cat_names = LISTS["BudgetCategory"]
+        data["budget_planned"] = [planned_by_cat.get(c, 0) for c in cat_names]
+        data["budget_actual"] = [actual_by_cat.get(c, 0) for c in cat_names]
+
+        data["paid_remaining"] = [
+            sum(x[7] for x in D.BUDGET_ITEMS),
+            sum(x[5] - x[7] for x in D.BUDGET_ITEMS),
+        ]
+
+        top5 = sorted(D.BUDGET_ITEMS, key=lambda x: -x[5])[:5]
+        data["top5_values"] = [x[5] for x in top5]
+        data["top5_labels"] = [x[2] for x in top5]
+
+        guest_rows = D.build_guest_rows(58)
+        rsvp_counts = Counter(g["RSVP Status"] for g in guest_rows)
+        data["rsvp"] = [rsvp_counts.get(s, 0) for s in LISTS["RSVPStatus"]]
+        meal_counts = Counter(g["Meal Preference"] for g in guest_rows)
+        data["meal"] = [meal_counts.get(m, 0) for m in LISTS["MealPreference"]]
+
+        period_total = Counter(t[0] for t in D.CHECKLIST_TASKS)
+        period_completed = Counter(t[0] for t in D.CHECKLIST_TASKS if t[6] == "Completed")
+        periods = LISTS["ChecklistPeriod"]
+        data["checklist_completed"] = [period_completed.get(p, 0) for p in periods]
+        data["checklist_remaining"] = [period_total.get(p, 0) - period_completed.get(p, 0) for p in periods]
+
+        data["honeymoon_categories"] = [x[0] for x in D.HONEYMOON]
+        data["honeymoon_planned"] = [x[1] for x in D.HONEYMOON]
+        data["honeymoon_actual"] = [x[2] for x in D.HONEYMOON]
+    else:
+        data["budget_planned"] = [0] * 20
+        data["budget_actual"] = [0] * 20
+        data["paid_remaining"] = [0, 0]
+        data["top5_values"] = []
+        data["top5_labels"] = []
+        data["rsvp"] = [0, 0, 0, 0]
+        data["meal"] = [0, 0, 0, 0, 0, 0]
+        data["checklist_completed"] = [0] * 9
+        data["checklist_remaining"] = [0] * 9
+        data["honeymoon_categories"] = [None] * 8
+        data["honeymoon_planned"] = [None] * 8
+        data["honeymoon_actual"] = [None] * 8
+    return data
+
+
 def build_dashboard(wb, refs, demo):
     """refs: dict with first/last rows for Budget, Vendors, Guest List, Payments,
     Master Checklist, Honeymoon Budget sheets."""
@@ -124,7 +247,7 @@ def build_dashboard(wb, refs, demo):
         ws.cell(row=5, column=c).border = Border(bottom=Side(style="medium", color=GOLD))
     nav = ws.cell(row=1, column=2, value="‹ Start Here")
     nav.font = F_NAV
-    nav.hyperlink = "#'START HERE'!A1"
+    set_internal_hyperlink(nav, "START HERE")
 
     B, V, G, P, C, H = refs["Budget"], refs["Vendors"], refs["Guest List"], refs["Payments"], refs["Master Checklist"], refs["Honeymoon Budget"]
 
@@ -240,12 +363,17 @@ def build_dashboard(wb, refs, demo):
     catref = Reference(wb["Lists"], min_col=LIST_COL["BudgetCategory"], min_row=2, max_row=21)
     left_anchor = get_column_letter(CHART_LEFT_COL)
     right_anchor = get_column_letter(CHART_RIGHT_COL)
+    cd = compute_chart_cache_data(demo)
+    budget_cat_names = LISTS["BudgetCategory"]
 
     c1c = BarChart(); c1c.type = "col"
     c1c.add_data(Reference(lst, min_col=H_PLANNED, max_col=H_ACTUAL, min_row=1, max_row=21), titles_from_data=True)
     c1c.set_categories(catref)
     style_chart(c1c, "Budget vs. Actual by Category")
     c1c.y_axis.numFmt = FMT_CURRENCY0
+    cache_categories(c1c, budget_cat_names)
+    cache_values(c1c.series[0], cd["budget_planned"])
+    cache_values(c1c.series[1], cd["budget_actual"])
     ws.add_chart(c1c, f"{left_anchor}{charts_start}")
 
     c2c = DoughnutChart()
@@ -253,7 +381,12 @@ def build_dashboard(wb, refs, demo):
     c2c.set_categories(catref)
     style_chart(c2c, "Expenses by Category")
     colorize_doughnut(c2c, 20)
-    c2c.dataLabels = DataLabelList(); c2c.dataLabels.showPercent = True
+    # No per-slice labels — with 20 categories those always overlap into an
+    # unreadable mass. The legend (20 color-keyed names, already present)
+    # is the clean, non-overlapping way to read this chart.
+    clean_legend(c2c, font_size=800)
+    cache_categories(c2c, budget_cat_names)
+    cache_values(c2c.series[0], cd["budget_actual"])
     ws.add_chart(c2c, f"{right_anchor}{charts_start}")
 
     row2 = charts_start + CHART_ROW_STEP
@@ -262,6 +395,8 @@ def build_dashboard(wb, refs, demo):
     c3c.set_categories(Reference(lst, min_col=H_PAIDREM_LABEL, min_row=2, max_row=3))
     style_chart(c3c, "Paid vs. Remaining")
     c3c.legend = None
+    cache_categories(c3c, ["Paid", "Remaining"])
+    cache_values(c3c.series[0], cd["paid_remaining"])
     ws.add_chart(c3c, f"{left_anchor}{row2}")
 
     c4c = BarChart(); c4c.type = "bar"
@@ -269,6 +404,8 @@ def build_dashboard(wb, refs, demo):
     c4c.set_categories(Reference(lst, min_col=H_TOP5_LABEL, min_row=2, max_row=6))
     style_chart(c4c, "Top 5 Wedding Expenses")
     c4c.legend = None
+    cache_categories(c4c, cd["top5_labels"] + [None] * (5 - len(cd["top5_labels"])))
+    cache_values(c4c.series[0], cd["top5_values"])
     ws.add_chart(c4c, f"{right_anchor}{row2}")
 
     row3 = charts_start + 2 * CHART_ROW_STEP
@@ -277,7 +414,12 @@ def build_dashboard(wb, refs, demo):
     c5c.set_categories(Reference(wb["Lists"], min_col=LIST_COL["RSVPStatus"], min_row=2, max_row=5))
     style_chart(c5c, "RSVP Status")
     colorize_doughnut(c5c, 4)
-    c5c.dataLabels = DataLabelList(); c5c.dataLabels.showVal = True
+    # Same fix as Expenses by Category: no on-slice labels (they overlapped
+    # and, worse, mixed series/category/value/percent text together — see
+    # clean_legend for the readable, non-overlapping replacement).
+    clean_legend(c5c, font_size=1000)
+    cache_categories(c5c, LISTS["RSVPStatus"])
+    cache_values(c5c.series[0], cd["rsvp"])
     ws.add_chart(c5c, f"{left_anchor}{row3}")
 
     c6c = BarChart(); c6c.type = "col"
@@ -285,6 +427,8 @@ def build_dashboard(wb, refs, demo):
     c6c.set_categories(Reference(wb["Lists"], min_col=LIST_COL["MealPreference"], min_row=2, max_row=7))
     style_chart(c6c, "Guest Meal Preferences")
     c6c.legend = None
+    cache_categories(c6c, LISTS["MealPreference"])
+    cache_values(c6c.series[0], cd["meal"])
     ws.add_chart(c6c, f"{right_anchor}{row3}")
 
     row4 = charts_start + 3 * CHART_ROW_STEP
@@ -293,6 +437,9 @@ def build_dashboard(wb, refs, demo):
     c7c.add_data(Reference(lst, min_col=H_CHK_REMAINING, min_row=1, max_row=10), titles_from_data=True)
     c7c.set_categories(Reference(lst, min_col=H_SHORT_PERIOD, min_row=2, max_row=10))
     style_chart(c7c, "Checklist Completion by Period")
+    cache_categories(c7c, SHORT_PERIOD_LABELS)
+    cache_values(c7c.series[0], cd["checklist_completed"])
+    cache_values(c7c.series[1], cd["checklist_remaining"])
     ws.add_chart(c7c, f"{left_anchor}{row4}")
 
     c8c = BarChart(); c8c.type = "col"
@@ -300,6 +447,9 @@ def build_dashboard(wb, refs, demo):
     c8c.add_data(Reference(wb["Honeymoon Budget"], min_col=4, min_row=H[0]-1, max_row=H[1]), titles_from_data=True)
     c8c.set_categories(Reference(wb["Honeymoon Budget"], min_col=2, min_row=H[0], max_row=H[1]))
     style_chart(c8c, "Honeymoon: Planned vs. Actual")
+    cache_categories(c8c, cd["honeymoon_categories"])
+    cache_values(c8c.series[0], cd["honeymoon_planned"])
+    cache_values(c8c.series[1], cd["honeymoon_actual"])
     ws.add_chart(c8c, f"{right_anchor}{row4}")
 
     last_row = row4 + CHART_ROWS + 2   # small bottom margin
@@ -316,6 +466,16 @@ def build_dashboard(wb, refs, demo):
     ws.page_margins.top = 0.4
     ws.page_margins.bottom = 0.4
     ws.print_area = f"A1:{get_column_letter(PRINT_RIGHT_COL)}{last_row}"
+
+    # Explicit page break so a chart is never split mid-chart across a page
+    # boundary (natural/automatic pagination was cutting the "Paid vs.
+    # Remaining" and "Top 5 Wedding Expenses" charts in half). Page 1: banner
+    # + KPI cards + chart row 1. Page 2: chart rows 2, 3 and 4 together —
+    # verified (by rendering) to fit on one page without the KPI block above
+    # them, which also removes the large trailing blank area that resulted
+    # from spreading them across two mostly-empty pages.
+    row1_end = charts_start + CHART_ROWS - 1
+    ws.row_breaks.append(Break(id=row1_end))
 
     ws.sheet_view.zoomScale = 85
     return ws
